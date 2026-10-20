@@ -114,43 +114,43 @@ def is_super_owner(user_id: int) -> bool:
 def get_start_keyboard(user_id: int):
     keyboard = [
         [
-            InlineKeyboardButton(text="Add Account", callback_data="add_account", style="success"),
-            InlineKeyboardButton(text="My Accounts", callback_data="my_accounts", style="primary")
+            InlineKeyboardButton(text="Add Account", callback_data="add_account"),
+            InlineKeyboardButton(text="My Accounts", callback_data="my_accounts")
         ],
         [
-            InlineKeyboardButton(text="Add Task", callback_data="add_task", style="success"),
-            InlineKeyboardButton(text="My Tasks", callback_data="my_tasks", style="primary")
+            InlineKeyboardButton(text="Add Task", callback_data="add_task"),
+            InlineKeyboardButton(text="My Tasks", callback_data="my_tasks")
         ],
         [
-            InlineKeyboardButton(text="Task History", callback_data="task_history", style="primary"),
-            InlineKeyboardButton(text="Help", callback_data="help", style="primary")
+            InlineKeyboardButton(text="Task History", callback_data="task_history"),
+            InlineKeyboardButton(text="Help", callback_data="help")
         ]
     ]
     if is_super_owner(user_id):
-        keyboard.append([InlineKeyboardButton(text="Admin Panel", callback_data="admin_panel", style="danger")])
+        keyboard.append([InlineKeyboardButton(text="Admin Panel", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_admin_keyboard():
     keyboard = [
         [
-            InlineKeyboardButton(text="Add User", callback_data="admin_add_user", style="success"),
-            InlineKeyboardButton(text="Remove User", callback_data="admin_remove_user", style="danger")
+            InlineKeyboardButton(text="Add User", callback_data="admin_add_user"),
+            InlineKeyboardButton(text="Remove User", callback_data="admin_remove_user")
         ],
         [
-            InlineKeyboardButton(text="List Users", callback_data="admin_list_users", style="primary"),
-            InlineKeyboardButton(text="User Details", callback_data="admin_user_details", style="primary")
+            InlineKeyboardButton(text="List Users", callback_data="admin_list_users"),
+            InlineKeyboardButton(text="User Details", callback_data="admin_user_details")
         ],
         [
-            InlineKeyboardButton(text="Account Overview", callback_data="admin_accounts_overview", style="primary"),
-            InlineKeyboardButton(text="Task Overview", callback_data="admin_tasks_overview", style="primary")
+            InlineKeyboardButton(text="Account Overview", callback_data="admin_accounts_overview"),
+            InlineKeyboardButton(text="Task Overview", callback_data="admin_tasks_overview")
         ],
         [
-            InlineKeyboardButton(text="Pause All Tasks", callback_data="admin_pause_all", style="danger"),
-            InlineKeyboardButton(text="Resume Eligible", callback_data="admin_resume_all", style="success")
+            InlineKeyboardButton(text="Pause All Tasks", callback_data="admin_pause_all"),
+            InlineKeyboardButton(text="Resume Eligible", callback_data="admin_resume_all")
         ],
         [
-            InlineKeyboardButton(text="System Statistics", callback_data="admin_stats", style="primary"),
-            InlineKeyboardButton(text="Back to Menu", callback_data="main_menu", style="primary")
+            InlineKeyboardButton(text="System Statistics", callback_data="admin_stats"),
+            InlineKeyboardButton(text="Back to Menu", callback_data="main_menu")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -193,7 +193,7 @@ async def cb_help(callback: CallbackQuery):
         "3. **My Tasks**: View, pause, resume, or delete your automated background tasks.\n"
         "4. **Intervals**: Supported intervals are 10m, 30m, 1h, and 2h.\n"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="main_menu")]])
     await callback.message.edit_text(help_text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
@@ -215,7 +215,7 @@ async def cb_admin_add_user(callback: CallbackQuery, state: FSMContext):
     if not is_super_owner(callback.from_user.id):
         return
     await state.set_state(AddUserStates.waiting_for_user_id)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="admin_panel", style="danger")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="admin_panel")]])
     await callback.message.edit_text("👤 Send the numeric Telegram user ID of the user you want to authorize:", reply_markup=keyboard)
     await callback.answer()
 
@@ -254,7 +254,7 @@ async def cb_admin_remove_user(callback: CallbackQuery, state: FSMContext):
     if not is_super_owner(callback.from_user.id):
         return
     await state.set_state(RemoveUserStates.waiting_for_user_id)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="admin_panel", style="danger")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="admin_panel")]])
     await callback.message.edit_text("🗑 Enter the numeric Telegram user ID to revoke access and pause their tasks:", reply_markup=keyboard)
     await callback.answer()
 
@@ -307,17 +307,17 @@ async def cb_admin_stats(callback: CallbackQuery):
         f"• Paused Tasks: `{paused_tasks}`\n"
         f"• Failed/Error Tasks: `{failed_tasks}`\n"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back to Admin", callback_data="admin_panel", style="primary")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back to Admin", callback_data="admin_panel")]])
     await callback.message.edit_text(stats_text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-# --- Robust Telethon Account Login Flow (Fixed for OTP/Code Processing) ---
+# --- Robust Telethon Account Login Flow (Fixed for International Format & Logging) ---
 @router.callback_query(F.data == "add_account")
 async def cb_add_account(callback: CallbackQuery, state: FSMContext):
     if not await is_authorized_user(callback.from_user.id):
         return
     await state.set_state(AccountLoginStates.waiting_for_phone)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu", style="danger")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu")]])
     await callback.message.edit_text(
         "📱 **Add Telegram Account**\n\nPlease enter your phone number with country code (e.g., `+1234567890`):",
         reply_markup=keyboard,
@@ -329,21 +329,29 @@ async def cb_add_account(callback: CallbackQuery, state: FSMContext):
 async def process_phone(message: Message, state: FSMContext):
     phone = message.text.strip()
     user_id = message.from_user.id
+    logger.info(f"[LOGIN] User {user_id} initiated login with phone number: {phone}")
     
-    # Initialize connection and store client instance in memory to preserve login session hash
+    # Initialize connection and store client instance in memory with logging enabled
     client = TelegramClient(StringSession(), config.API_ID, config.API_HASH)
     try:
+        logger.info(f"[LOGIN] Connecting Telethon client for user {user_id}...")
         await client.connect()
-        await client.send_code_request(phone)
+        
+        logger.info(f"[LOGIN] Requesting sign-in code for {phone}...")
+        sent_code = await client.send_code_request(phone)
         temp_clients[user_id] = client
         
+        logger.info(f"[LOGIN] Successfully dispatched code request for {phone}. Hash type: {type(sent_code)}")
         await state.update_data(phone=phone)
         await state.set_state(AccountLoginStates.waiting_for_code)
         await message.answer("📩 Verification code sent! Please enter the code you received on Telegram:")
     except Exception as e:
-        await client.disconnect()
-        logger.error(f"Error sending code: {e}")
-        await message.answer(f"❌ Error sending confirmation code: {str(e)}\nTry again or press /start.")
+        logger.error(f"[LOGIN ERROR] Failed sending code for phone {phone}: {e}", exc_info=True)
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        await message.answer(f"❌ Error sending confirmation code: {str(e)}\nMake sure the format is correct (e.g. +91...) and try again via /start.")
         await state.clear()
 
 @router.message(AccountLoginStates.waiting_for_code)
@@ -352,30 +360,42 @@ async def process_code(message: Message, state: FSMContext):
     user_id = message.from_user.id
     data = await state.get_data()
     phone = data.get("phone")
+    logger.info(f"[LOGIN] Processing verification code for user {user_id} and phone {phone}")
 
     client = temp_clients.get(user_id)
     if not client:
+        logger.warning(f"[LOGIN WARNING] Temporary client session missing for user {user_id} during code verification.")
         await message.answer("⚠️ Session expired or bot restarted. Please click 'Add Account' again.")
         await state.clear()
         return
 
     try:
+        logger.info(f"[LOGIN] Attempting sign_in with code for {phone}...")
         await client.sign_in(phone=phone, code=code)
+        logger.info(f"[LOGIN] Sign in with code successful for user {user_id}!")
         await finalize_account_connection(message, client, state)
     except SessionPasswordNeededError:
+        logger.info(f"[LOGIN] Two-step verification password required for user {user_id}.")
         await state.set_state(AccountLoginStates.waiting_for_password)
         await message.answer("🔐 Two-step verification is enabled. Please enter your account password:")
     except (PhoneCodeInvalidError, PhoneCodeExpiredError) as e:
+        logger.warning(f"[LOGIN WARNING] Invalid or expired code provided by user {user_id}: {e}")
         await message.answer(f"❌ Invalid or expired code: {e}. Start over via /start.")
         if user_id in temp_clients:
-            await temp_clients[user_id].disconnect()
+            try:
+                await temp_clients[user_id].disconnect()
+            except Exception:
+                pass
             del temp_clients[user_id]
         await state.clear()
     except Exception as e:
-        logger.error(f"Sign in error: {e}")
+        logger.error(f"[LOGIN ERROR] Unexpected error during code sign-in for user {user_id}: {e}", exc_info=True)
         await message.answer(f"❌ Authentication failed: {str(e)}")
         if user_id in temp_clients:
-            await temp_clients[user_id].disconnect()
+            try:
+                await temp_clients[user_id].disconnect()
+            except Exception:
+                pass
             del temp_clients[user_id]
         await state.clear()
 
@@ -383,32 +403,43 @@ async def process_code(message: Message, state: FSMContext):
 async def process_password(message: Message, state: FSMContext):
     password = message.text.strip()
     user_id = message.from_user.id
+    logger.info(f"[LOGIN] Processing 2FA password verification for user {user_id}")
 
     client = temp_clients.get(user_id)
     if not client:
+        logger.warning(f"[LOGIN WARNING] Temporary client session missing for user {user_id} during 2FA password step.")
         await message.answer("⚠️ Session expired or bot restarted. Please click 'Add Account' again.")
         await state.clear()
         return
 
     try:
         await client.sign_in(password=password)
+        logger.info(f"[LOGIN] 2FA password verification successful for user {user_id}!")
         await finalize_account_connection(message, client, state)
     except PasswordHashInvalidError:
+        logger.warning(f"[LOGIN WARNING] Invalid 2FA password entered by user {user_id}.")
         await message.answer("❌ Invalid password. Start over via /start.")
         if user_id in temp_clients:
-            await temp_clients[user_id].disconnect()
+            try:
+                await temp_clients[user_id].disconnect()
+            except Exception:
+                pass
             del temp_clients[user_id]
         await state.clear()
     except Exception as e:
-        logger.error(f"Password sign-in error: {e}")
+        logger.error(f"[LOGIN ERROR] Password sign-in error for user {user_id}: {e}", exc_info=True)
         await message.answer(f"❌ Authentication error: {str(e)}")
         if user_id in temp_clients:
-            await temp_clients[user_id].disconnect()
+            try:
+                await temp_clients[user_id].disconnect()
+            except Exception:
+                pass
             del temp_clients[user_id]
         await state.clear()
 
 async def finalize_account_connection(message: Message, client: TelegramClient, state: FSMContext):
     user_id = message.from_user.id
+    logger.info(f"[LOGIN] Finalizing account connection for user {user_id}...")
     me = await client.get_me()
     session_string = client.session.save()
     await client.disconnect()
@@ -433,6 +464,7 @@ async def finalize_account_connection(message: Message, client: TelegramClient, 
         },
         upsert=True
     )
+    logger.info(f"[LOGIN] Successfully saved account {me.id} for user {user_id} in database.")
     await state.clear()
     await message.answer(f"✅ Successfully connected account for **{me.first_name}** (`{me.id}`)", parse_mode="Markdown", reply_markup=get_start_keyboard(user_id))
 
@@ -443,7 +475,7 @@ async def cb_my_accounts(callback: CallbackQuery):
     accounts = await cursor.to_list(length=20)
 
     if not accounts:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="main_menu")]])
         await callback.message.edit_text("📂 You have no connected accounts.", reply_markup=keyboard)
         await callback.answer()
         return
@@ -453,10 +485,10 @@ async def cb_my_accounts(callback: CallbackQuery):
     for acc in accounts:
         text += f"• ID: `{acc['account_id']}` | TG ID: `{acc['telegram_user_id']}` | Status: **{acc['status']}**\n"
         keyboard_buttons.append([
-            InlineKeyboardButton(text=f"Disconnect {acc['telegram_user_id']}", callback_data=f"disc_acc_{acc['account_id']}", style="danger")
+            InlineKeyboardButton(text=f"Disconnect {acc['telegram_user_id']}", callback_data=f"disc_acc_{acc['account_id']}")
         ])
     
-    keyboard_buttons.append([InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")])
+    keyboard_buttons.append([InlineKeyboardButton(text="« Back", callback_data="main_menu")])
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_buttons), parse_mode="Markdown")
     await callback.answer()
 
@@ -474,16 +506,16 @@ async def cb_add_task(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     accounts = await accounts_col.find({"owner_id": user_id, "status": "connected"}).to_list(length=10)
     if not accounts:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Add Account First", callback_data="add_account", style="success")],[InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Add Account First", callback_data="add_account")],[InlineKeyboardButton(text="« Back", callback_data="main_menu")]])
         await callback.message.edit_text("⚠️ You need at least one connected account to create a task.", reply_markup=keyboard)
         return
 
     keyboard_buttons = []
     for acc in accounts:
         keyboard_buttons.append([
-            InlineKeyboardButton(text=f"Account: {acc['telegram_user_id']}", callback_data=f"task_acc_{acc['account_id']}", style="primary")
+            InlineKeyboardButton(text=f"Account: {acc['telegram_user_id']}", callback_data=f"task_acc_{acc['account_id']}")
         ])
-    keyboard_buttons.append([InlineKeyboardButton(text="Cancel", callback_data="main_menu", style="danger")])
+    keyboard_buttons.append([InlineKeyboardButton(text="Cancel", callback_data="main_menu")])
 
     await state.set_state(AddTaskStates.selecting_account)
     await callback.message.edit_text("📌 Select the Telegram account to run this task with:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_buttons))
@@ -495,7 +527,7 @@ async def process_task_account(callback: CallbackQuery, state: FSMContext):
     await state.update_data(account_id=account_id)
     await state.set_state(AddTaskStates.waiting_for_destination)
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu", style="danger")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu")]])
     await callback.message.edit_text(
         "🎯 Enter the destination public group link or channel username (e.g., `@mychannel` or `https://t.me/group`):\n\n"
         "*(Ensure the connected account is authorized to post there)*",
@@ -510,7 +542,7 @@ async def process_task_destination(message: Message, state: FSMContext):
     await state.update_data(destination=destination)
     await state.set_state(AddTaskStates.waiting_for_message)
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu", style="danger")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu")]])
     await message.answer("✍️ Now forward or send the exact text message you want to schedule and broadcast:", reply_markup=keyboard)
 
 @router.message(AddTaskStates.waiting_for_message)
@@ -520,11 +552,11 @@ async def process_task_message(message: Message, state: FSMContext):
     await state.set_state(AddTaskStates.selecting_interval)
 
     keyboard = [
-        [InlineKeyboardButton(text="10 Minutes", callback_data="int_600", style="primary")],
-        [InlineKeyboardButton(text="30 Minutes", callback_data="int_1800", style="primary")],
-        [InlineKeyboardButton(text="1 Hour", callback_data="int_3600", style="primary")],
-        [InlineKeyboardButton(text="2 Hours", callback_data="int_7200", style="primary")],
-        [InlineKeyboardButton(text="Cancel", callback_data="main_menu", style="danger")]
+        [InlineKeyboardButton(text="10 Minutes", callback_data="int_600")],
+        [InlineKeyboardButton(text="30 Minutes", callback_data="int_1800")],
+        [InlineKeyboardButton(text="1 Hour", callback_data="int_3600")],
+        [InlineKeyboardButton(text="2 Hours", callback_data="int_7200")],
+        [InlineKeyboardButton(text="Cancel", callback_data="main_menu")]
     ]
     await message.answer("⏱ Select the scheduled posting interval:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
 
@@ -544,8 +576,8 @@ async def process_task_interval(callback: CallbackQuery, state: FSMContext):
         "Do you want to confirm and activate this automated task?"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Confirm & Activate", callback_data="confirm_add_task", style="success")],
-        [InlineKeyboardButton(text="Cancel", callback_data="main_menu", style="danger")]
+        [InlineKeyboardButton(text="Confirm & Activate", callback_data="confirm_add_task")],
+        [InlineKeyboardButton(text="Cancel", callback_data="main_menu")]
     ])
     await state.set_state(AddTaskStates.confirming_task)
     await callback.message.edit_text(summary, reply_markup=keyboard, parse_mode="Markdown")
@@ -573,7 +605,7 @@ async def process_confirm_task(callback: CallbackQuery, state: FSMContext):
     schedule_task_job(task_doc)
 
     await state.clear()
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="View My Tasks", callback_data="my_tasks", style="primary")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="View My Tasks", callback_data="my_tasks")]])
     await callback.message.edit_text("✅ Task successfully created and scheduled!", reply_markup=keyboard)
     await callback.answer()
 
@@ -584,7 +616,7 @@ async def cb_my_tasks(callback: CallbackQuery):
     tasks = await tasks_col.find({"owner_id": user_id}).to_list(length=20)
 
     if not tasks:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="main_menu")]])
         await callback.message.edit_text("📋 You have no active tasks configured.", reply_markup=keyboard)
         await callback.answer()
         return
@@ -594,10 +626,10 @@ async def cb_my_tasks(callback: CallbackQuery):
     for t in tasks:
         text += f"• ID: `{t['task_id']}` | Dest: `{t['destination_id']}` | Status: **{t['status']}**\n"
         buttons.append([
-            InlineKeyboardButton(text=f"Manage {t['task_id'][-6:]}", callback_data=f"manage_task_{t['task_id']}", style="primary")
+            InlineKeyboardButton(text=f"Manage {t['task_id'][-6:]}", callback_data=f"manage_task_{t['task_id']}")
         ])
 
-    buttons.append([InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")])
+    buttons.append([InlineKeyboardButton(text="« Back", callback_data="main_menu")])
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
     await callback.answer()
 
@@ -621,12 +653,12 @@ async def cb_manage_task(callback: CallbackQuery):
     )
     buttons = [
         [
-            InlineKeyboardButton(text="Pause", callback_data=f"t_pause_{task_id}", style="danger"),
-            InlineKeyboardButton(text="Resume", callback_data=f"t_resume_{task_id}", style="success")
+            InlineKeyboardButton(text="Pause", callback_data=f"t_pause_{task_id}"),
+            InlineKeyboardButton(text="Resume", callback_data=f"t_resume_{task_id}")
         ],
         [
-            InlineKeyboardButton(text="Delete", callback_data=f"t_del_{task_id}", style="danger"),
-            InlineKeyboardButton(text="« Back", callback_data="my_tasks", style="primary")
+            InlineKeyboardButton(text="Delete", callback_data=f"t_del_{task_id}"),
+            InlineKeyboardButton(text="« Back", callback_data="my_tasks")
         ]
     ]
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
