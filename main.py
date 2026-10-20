@@ -978,39 +978,14 @@ async def handle_check_db_storage(callback: CallbackQuery, bot: Bot):
     buttons = [[InlineKeyboardButton(text="🔙 Return Back", callback_data="admin_panel", style="primary")]]
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
+# Verification routine disabled per request
 async def verify_saved_sessions():
-    logger.info("Verifying all active account database sessions and segregating older sessions into dedicated tables...")
-    accounts = await db_mgr.db.accounts.find({"status": "active"}).to_list(length=None)
-    for a in accounts:
-        try:
-            client = TelegramClient(StringSession(decrypt_data(a["session_string"])), config.API_ID, config.API_HASH)
-            await client.connect()
-            if not await client.is_user_authorized():
-                await db_mgr.db.accounts.update_one({"phone": a["phone"]}, {"$set": {"status": "dead"}})
-            else:
-                # Migrate and store verified older sessions into a separate table with unique session_id
-                session_id = f"old_sess_{a.get('phone', int(time.time()))}"
-                await db_mgr.db.old_sessions.update_one(
-                    {"session_id": session_id},
-                    {"$set": {
-                        "session_id": session_id,
-                        "phone": a.get("phone"),
-                        "user_id": a.get("user_id"),
-                        "username": a.get("username"),
-                        "session_string": a.get("session_string"),
-                        "status": "active",
-                        "verified_at": time.time()
-                    }},
-                    upsert=True
-                )
-            await client.disconnect()
-        except Exception as e:
-            logger.error(f"Error verifying older session: {e}")
+    pass
 
 async def main():
     global bot_username
     await db_mgr.init()
-    await verify_saved_sessions()
+    # verify_saved_sessions() is bypassed so startup remains uninterrupted
     if not config.BOT_TOKEN:
         logger.error("Bot token missing!")
         return
