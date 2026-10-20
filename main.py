@@ -52,7 +52,7 @@ admin_audit_col = db["admin_audit"]
 
 scheduler = AsyncIOScheduler()
 
-# In-memory store for active login clients to ensure smooth phone -> code -> password flow
+# In-memory store for active login clients
 temp_clients = {}
 
 # --- Security: Encryption Utilities for Telethon Sessions ---
@@ -189,9 +189,9 @@ async def cb_help(callback: CallbackQuery):
     help_text = (
         "📖 **Help & Guide**\n\n"
         "1. **Add Account**: Securely log into your Telegram user account via Telethon.\n"
-        "2. **Add Task**: Automate posting approved messages to authorized chats.\n"
-        "3. **My Tasks**: View, pause, resume, or delete your automated background tasks.\n"
-        "4. **Intervals**: Supported intervals are 10m, 30m, 1h, and 2h.\n"
+        "   *Note: Telegram login codes are delivered directly to your official Telegram app notifications chat (Service Notifications), NOT via SMS.*\n"
+        "2. **Add Task**: Automate posting messages to authorized chats.\n"
+        "3. **My Tasks**: View, pause, resume, or delete your background tasks.\n"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back", callback_data="main_menu")]])
     await callback.message.edit_text(help_text, reply_markup=keyboard, parse_mode="Markdown")
@@ -229,23 +229,11 @@ async def process_add_user(message: Message, state: FSMContext):
         await message.answer("❌ Invalid numeric ID. Please enter a valid integer user ID.")
         return
 
-    existing = await users_col.find_one({"user_id": target_id})
-    if existing and existing.get("authorized"):
-        await message.answer("⚠️ This user is already authorized.")
-        await state.clear()
-        return
-
     await users_col.update_one(
         {"user_id": target_id},
         {"$set": {"authorized": True, "role": "user", "created_at": datetime.datetime.utcnow()}},
         upsert=True
     )
-    await admin_audit_col.insert_one({
-        "admin_id": message.from_user.id,
-        "action": "ADD_USER",
-        "target_id": target_id,
-        "timestamp": datetime.datetime.utcnow()
-    })
     await message.answer(f"✅ Successfully authorized user `{target_id}`.", parse_mode="Markdown")
     await state.clear()
 
@@ -255,7 +243,7 @@ async def cb_admin_remove_user(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(RemoveUserStates.waiting_for_user_id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="admin_panel")]])
-    await callback.message.edit_text("🗑 Enter the numeric Telegram user ID to revoke access and pause their tasks:", reply_markup=keyboard)
+    await callback.message.edit_text("🗑 Enter the numeric Telegram user ID to revoke access:", reply_markup=keyboard)
     await callback.answer()
 
 @router.message(RemoveUserStates.waiting_for_user_id)
@@ -275,13 +263,6 @@ async def process_remove_user(message: Message, state: FSMContext):
 
     await users_col.update_one({"user_id": target_id}, {"$set": {"authorized": False}})
     await tasks_col.update_many({"owner_id": target_id}, {"$set": {"status": "paused"}})
-
-    await admin_audit_col.insert_one({
-        "admin_id": message.from_user.id,
-        "action": "REMOVE_USER",
-        "target_id": target_id,
-        "timestamp": datetime.datetime.utcnow()
-    })
     await message.answer(f"✅ Revoked access for user `{target_id}` and paused associated tasks.", parse_mode="Markdown")
     await state.clear()
 
@@ -295,8 +276,6 @@ async def cb_admin_stats(callback: CallbackQuery):
     active_accounts = await accounts_col.count_documents({"status": "connected"})
     total_tasks = await tasks_col.count_documents({})
     running_tasks = await tasks_col.count_documents({"status": "running"})
-    paused_tasks = await tasks_col.count_documents({"status": "paused"})
-    failed_tasks = await tasks_col.count_documents({"status": "failed"})
 
     stats_text = (
         f"📊 **System Statistics**\n\n"
@@ -304,14 +283,12 @@ async def cb_admin_stats(callback: CallbackQuery):
         f"• Total Accounts: `{total_accounts}` (Active: `{active_accounts}`)\n"
         f"• Total Tasks: `{total_tasks}`\n"
         f"• Running Tasks: `{running_tasks}`\n"
-        f"• Paused Tasks: `{paused_tasks}`\n"
-        f"• Failed/Error Tasks: `{failed_tasks}`\n"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Back to Admin", callback_data="admin_panel")]])
     await callback.message.edit_text(stats_text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-# --- Robust Telethon Account Login Flow (Fixed for International Format & Logging) ---
+# --- Telethon Account Login Flow ---
 @router.callback_query(F.data == "add_account")
 async def cb_add_account(callback: CallbackQuery, state: FSMContext):
     if not await is_authorized_user(callback.from_user.id):
@@ -319,7 +296,9 @@ async def cb_add_account(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AccountLoginStates.waiting_for_phone)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu")]])
     await callback.message.edit_text(
-        "📱 **Add Telegram Account**\n\nPlease enter your phone number with country code (e.g., `+1234567890`):",
+        "📱 **Add Telegram Account**\n\n"
+        "Please enter your phone number with country code (e.g., `+918368682624`):\n\n"
+        "⚠️ *Important*: The code will be sent to your **official Telegram app** (Service Notifications chat), NOT via SMS.",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -331,7 +310,6 @@ async def process_phone(message: Message, state: FSMContext):
     user_id = message.from_user.id
     logger.info(f"[LOGIN] User {user_id} initiated login with phone number: {phone}")
     
-    # Initialize connection and store client instance in memory with logging enabled
     client = TelegramClient(StringSession(), config.API_ID, config.API_HASH)
     try:
         logger.info(f"[LOGIN] Connecting Telethon client for user {user_id}...")
@@ -344,14 +322,17 @@ async def process_phone(message: Message, state: FSMContext):
         logger.info(f"[LOGIN] Successfully dispatched code request for {phone}. Hash type: {type(sent_code)}")
         await state.update_data(phone=phone)
         await state.set_state(AccountLoginStates.waiting_for_code)
-        await message.answer("📩 Verification code sent! Please enter the code you received on Telegram:")
+        await message.answer(
+            "📩 **Verification Code Dispatched!**\n\n"
+            "Please check your **official Telegram application** (under **Service Notifications**) for the login code. Enter it below:"
+        , parse_mode="Markdown")
     except Exception as e:
         logger.error(f"[LOGIN ERROR] Failed sending code for phone {phone}: {e}", exc_info=True)
         try:
             await client.disconnect()
         except Exception:
             pass
-        await message.answer(f"❌ Error sending confirmation code: {str(e)}\nMake sure the format is correct (e.g. +91...) and try again via /start.")
+        await message.answer(f"❌ Error sending confirmation code: {str(e)}\nMake sure the format is correct (e.g. +91...) and try again.")
         await state.clear()
 
 @router.message(AccountLoginStates.waiting_for_code)
@@ -360,26 +341,20 @@ async def process_code(message: Message, state: FSMContext):
     user_id = message.from_user.id
     data = await state.get_data()
     phone = data.get("phone")
-    logger.info(f"[LOGIN] Processing verification code for user {user_id} and phone {phone}")
 
     client = temp_clients.get(user_id)
     if not client:
-        logger.warning(f"[LOGIN WARNING] Temporary client session missing for user {user_id} during code verification.")
         await message.answer("⚠️ Session expired or bot restarted. Please click 'Add Account' again.")
         await state.clear()
         return
 
     try:
-        logger.info(f"[LOGIN] Attempting sign_in with code for {phone}...")
         await client.sign_in(phone=phone, code=code)
-        logger.info(f"[LOGIN] Sign in with code successful for user {user_id}!")
         await finalize_account_connection(message, client, state)
     except SessionPasswordNeededError:
-        logger.info(f"[LOGIN] Two-step verification password required for user {user_id}.")
         await state.set_state(AccountLoginStates.waiting_for_password)
         await message.answer("🔐 Two-step verification is enabled. Please enter your account password:")
     except (PhoneCodeInvalidError, PhoneCodeExpiredError) as e:
-        logger.warning(f"[LOGIN WARNING] Invalid or expired code provided by user {user_id}: {e}")
         await message.answer(f"❌ Invalid or expired code: {e}. Start over via /start.")
         if user_id in temp_clients:
             try:
@@ -389,7 +364,7 @@ async def process_code(message: Message, state: FSMContext):
             del temp_clients[user_id]
         await state.clear()
     except Exception as e:
-        logger.error(f"[LOGIN ERROR] Unexpected error during code sign-in for user {user_id}: {e}", exc_info=True)
+        logger.error(f"[LOGIN ERROR] Code sign-in error: {e}", exc_info=True)
         await message.answer(f"❌ Authentication failed: {str(e)}")
         if user_id in temp_clients:
             try:
@@ -403,21 +378,16 @@ async def process_code(message: Message, state: FSMContext):
 async def process_password(message: Message, state: FSMContext):
     password = message.text.strip()
     user_id = message.from_user.id
-    logger.info(f"[LOGIN] Processing 2FA password verification for user {user_id}")
-
     client = temp_clients.get(user_id)
     if not client:
-        logger.warning(f"[LOGIN WARNING] Temporary client session missing for user {user_id} during 2FA password step.")
-        await message.answer("⚠️ Session expired or bot restarted. Please click 'Add Account' again.")
+        await message.answer("⚠️ Session expired. Please click 'Add Account' again.")
         await state.clear()
         return
 
     try:
         await client.sign_in(password=password)
-        logger.info(f"[LOGIN] 2FA password verification successful for user {user_id}!")
         await finalize_account_connection(message, client, state)
     except PasswordHashInvalidError:
-        logger.warning(f"[LOGIN WARNING] Invalid 2FA password entered by user {user_id}.")
         await message.answer("❌ Invalid password. Start over via /start.")
         if user_id in temp_clients:
             try:
@@ -427,7 +397,7 @@ async def process_password(message: Message, state: FSMContext):
             del temp_clients[user_id]
         await state.clear()
     except Exception as e:
-        logger.error(f"[LOGIN ERROR] Password sign-in error for user {user_id}: {e}", exc_info=True)
+        logger.error(f"[LOGIN ERROR] Password sign-in error: {e}", exc_info=True)
         await message.answer(f"❌ Authentication error: {str(e)}")
         if user_id in temp_clients:
             try:
@@ -439,7 +409,6 @@ async def process_password(message: Message, state: FSMContext):
 
 async def finalize_account_connection(message: Message, client: TelegramClient, state: FSMContext):
     user_id = message.from_user.id
-    logger.info(f"[LOGIN] Finalizing account connection for user {user_id}...")
     me = await client.get_me()
     session_string = client.session.save()
     await client.disconnect()
@@ -464,7 +433,6 @@ async def finalize_account_connection(message: Message, client: TelegramClient, 
         },
         upsert=True
     )
-    logger.info(f"[LOGIN] Successfully saved account {me.id} for user {user_id} in database.")
     await state.clear()
     await message.answer(f"✅ Successfully connected account for **{me.first_name}** (`{me.id}`)", parse_mode="Markdown", reply_markup=get_start_keyboard(user_id))
 
@@ -497,7 +465,7 @@ async def cb_disconnect_account(callback: CallbackQuery):
     account_id = callback.data.replace("disc_acc_", "")
     await accounts_col.delete_one({"account_id": account_id, "owner_id": callback.from_user.id})
     await tasks_col.update_many({"account_id": account_id}, {"$set": {"status": "paused"}})
-    await callback.answer("Account disconnected and associated tasks paused.", show_alert=True)
+    await callback.answer("Account disconnected.", show_alert=True)
     await cb_my_accounts(callback)
 
 # --- Add Task Workflow ---
@@ -529,8 +497,7 @@ async def process_task_account(callback: CallbackQuery, state: FSMContext):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu")]])
     await callback.message.edit_text(
-        "🎯 Enter the destination public group link or channel username (e.g., `@mychannel` or `https://t.me/group`):\n\n"
-        "*(Ensure the connected account is authorized to post there)*",
+        "🎯 Enter the destination public group link or channel username (e.g., `@mychannel`):",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -543,7 +510,7 @@ async def process_task_destination(message: Message, state: FSMContext):
     await state.set_state(AddTaskStates.waiting_for_message)
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="main_menu")]])
-    await message.answer("✍️ Now forward or send the exact text message you want to schedule and broadcast:", reply_markup=keyboard)
+    await message.answer("✍️ Now send the text message you want to schedule and broadcast:", reply_markup=keyboard)
 
 @router.message(AddTaskStates.waiting_for_message)
 async def process_task_message(message: Message, state: FSMContext):
@@ -568,11 +535,8 @@ async def process_task_interval(callback: CallbackQuery, state: FSMContext):
 
     summary = (
         "📋 **Task Summary & Confirmation**\n\n"
-        f"• Account ID: `{data['account_id']}`\n"
         f"• Destination: `{data['destination']}`\n"
-        f"• Message Preview: `{data['message_reference'][:100]}...`\n"
-        f"• Interval: `{interval_seconds} seconds`\n"
-        f"• Status: `running`\n\n"
+        f"• Interval: `{interval_seconds} seconds`\n\n"
         "Do you want to confirm and activate this automated task?"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -643,13 +607,9 @@ async def cb_manage_task(callback: CallbackQuery):
 
     text = (
         f"⚙️ **Task Details**: `{task['task_id']}`\n\n"
-        f"• Account ID: `{task['account_id']}`\n"
         f"• Destination: `{task['destination_id']}`\n"
         f"• Interval: `{task['interval_seconds']}s`\n"
-        f"• Status: **{task['status']}**\n"
-        f"• Last Run: `{task.get('last_run_at')}`\n"
-        f"• Next Run: `{task.get('next_run_at')}`\n\n"
-        f"• Preview: `{task['message_reference'][:80]}`"
+        f"• Status: **{task['status']}**"
     )
     buttons = [
         [
@@ -716,7 +676,7 @@ async def execute_scheduled_task(task_id: str):
         if not await client.is_user_authorized():
             await accounts_col.update_one({"account_id": account["account_id"]}, {"$set": {"status": "expired"}})
             await tasks_col.update_one({"task_id": task_id}, {"$set": {"status": "failed"}})
-            await bot.send_message(task["owner_id"], f"⚠️ Session expired for account `{account['telegram_user_id']}`. Task `{task_id}` has been paused.")
+            await bot.send_message(task["owner_id"], f"⚠️ Session expired for account `{account['telegram_user_id']}`.")
             await client.disconnect()
             return
 
@@ -728,27 +688,12 @@ async def execute_scheduled_task(task_id: str):
             {"task_id": task_id},
             {"$set": {"status": "running", "next_run_at": next_run}}
         )
-        await task_logs_col.insert_one({
-            "task_id": task_id,
-            "owner_id": task["owner_id"],
-            "event": "SUCCESS",
-            "timestamp": datetime.datetime.utcnow(),
-            "safe_error_message": None
-        })
-
     except FloodWaitError as e:
         logger.warning(f"FloodWait encountered on task {task_id}: {e.seconds}s")
         await asyncio.sleep(e.seconds)
     except Exception as e:
         logger.error(f"Task execution failure for {task_id}: {e}")
         await tasks_col.update_one({"task_id": task_id}, {"$set": {"status": "failed"}})
-        await task_logs_col.insert_one({
-            "task_id": task_id,
-            "owner_id": task["owner_id"],
-            "event": "FAILURE",
-            "timestamp": datetime.datetime.utcnow(),
-            "safe_error_message": str(e)[:200]
-        })
 
 def schedule_task_job(task: dict):
     if scheduler.get_job(task["task_id"]):
