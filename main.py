@@ -6,7 +6,12 @@ import re
 import random
 import time
 import math
+import logging
 from typing import Dict, Any, List, Optional, Tuple
+
+# --- SUPPRESS TELETHON LOG SPAM ---
+logging.getLogger("telethon.network.mtprotosender").setLevel(logging.WARNING)
+logging.getLogger("telethon.network.connection").setLevel(logging.WARNING)
 
 # aiogram 3.x imports
 from aiogram import Bot, Dispatcher, Router, F
@@ -127,6 +132,17 @@ class Database:
         await self.db.account_assignments.create_index([("user_id", 1), ("phone", 1)], unique=True)
         await self.db.tasks.create_index("task_id", unique=True)
         logger.info("MongoDB database system initialized.")
+
+    async def create_user_if_not_exists(self, user_id: int, username: str, referred_by: Optional[int] = None):
+        user = await self.db.users.find_one({"user_id": user_id})
+        if not user:
+            await self.db.users.insert_one({
+                "user_id": user_id,
+                "username": username,
+                "role": "user",
+                "referred_by": referred_by,
+                "created_at": time.time()
+            })
 
     async def get_next_task_id(self) -> int:
         counter = await self.db.counters.find_one_and_update(
@@ -482,7 +498,6 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     user_id = message.from_user.id
     username = message.from_user.username or "Unknown"
 
-    # Restriction check: Only super owner or authorized users can access
     authorized = await db_mgr.is_user_authorized(user_id)
     if not authorized:
         await message.answer("⚠️ You are restricted. Only Super Owner can give you access.")
