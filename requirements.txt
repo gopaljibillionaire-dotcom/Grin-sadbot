@@ -1,4 +1,6 @@
-aiogram>=3.0.0
-telethon>=1.30.0
-motor>=3.3.0
-pymongo>=4.6.0
+aiogram>=3.3.0
+telethon>=1.34.0
+motor>=3.3.2
+cryptography>=41.0.7
+APScheduler>=3.10.4
+pymongo>=4.6.1
