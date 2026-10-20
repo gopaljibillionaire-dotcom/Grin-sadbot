@@ -52,9 +52,11 @@ admin_audit_col = db["admin_audit"]
 
 scheduler = AsyncIOScheduler()
 
+# In-memory store for active login clients to ensure smooth phone -> code -> password flow
+temp_clients = {}
+
 # --- Security: Encryption Utilities for Telethon Sessions ---
 def get_aesgcm():
-    # Derive a 32-byte key from the provided configuration key string
     key_bytes = config.ENCRYPTION_KEY.encode("utf-8")
     if len(key_bytes) < 32:
         key_bytes = key_bytes.ljust(32, b"\0")
@@ -92,9 +94,6 @@ class AddTaskStates(StatesGroup):
     waiting_for_message = State()
     selecting_interval = State()
     confirming_task = State()
-
-class EditTaskStates(StatesGroup):
-    selecting_interval = State()
 
 # --- Helper Checks & Database Initialization ---
 async def ensure_indexes():
@@ -275,7 +274,6 @@ async def process_remove_user(message: Message, state: FSMContext):
         return
 
     await users_col.update_one({"user_id": target_id}, {"$set": {"authorized": False}})
-    # Safely pause tasks
     await tasks_col.update_many({"owner_id": target_id}, {"$set": {"status": "paused"}})
 
     await admin_audit_col.insert_one({
@@ -313,7 +311,7 @@ async def cb_admin_stats(callback: CallbackQuery):
     await callback.message.edit_text(stats_text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-# --- Telethon Account Management ---
+# --- Robust Telethon Account Login Flow (Fixed for OTP/Code Processing) ---
 @router.callback_query(F.data == "add_account")
 async def cb_add_account(callback: CallbackQuery, state: FSMContext):
     if not await is_authorized_user(callback.from_user.id):
@@ -330,16 +328,16 @@ async def cb_add_account(callback: CallbackQuery, state: FSMContext):
 @router.message(AccountLoginStates.waiting_for_phone)
 async def process_phone(message: Message, state: FSMContext):
     phone = message.text.strip()
+    user_id = message.from_user.id
+    
+    # Initialize connection and store client instance in memory to preserve login session hash
     client = TelegramClient(StringSession(), config.API_ID, config.API_HASH)
-    await client.connect()
     try:
-        sent_code = await client.send_code_request(phone)
-        await state.update_data(phone=phone, phone_code_hash=sent_code.phone_code_hash)
-        # Store temporary client string session or keep client in memory per user session state
-        session_string = client.session.save()
-        await state.update_data(session_string=session_string)
-        await client.disconnect()
-
+        await client.connect()
+        await client.send_code_request(phone)
+        temp_clients[user_id] = client
+        
+        await state.update_data(phone=phone)
         await state.set_state(AccountLoginStates.waiting_for_code)
         await message.answer("📩 Verification code sent! Please enter the code you received on Telegram:")
     except Exception as e:
@@ -351,66 +349,82 @@ async def process_phone(message: Message, state: FSMContext):
 @router.message(AccountLoginStates.waiting_for_code)
 async def process_code(message: Message, state: FSMContext):
     code = message.text.strip()
+    user_id = message.from_user.id
     data = await state.get_data()
     phone = data.get("phone")
-    phone_code_hash = data.get("phone_code_hash")
-    session_string = data.get("session_string")
 
-    client = TelegramClient(StringSession(session_string), config.API_ID, config.API_HASH)
-    await client.connect()
+    client = temp_clients.get(user_id)
+    if not client:
+        await message.answer("⚠️ Session expired or bot restarted. Please click 'Add Account' again.")
+        await state.clear()
+        return
+
     try:
-        await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-        saved_session = client.session.save()
-        await finalize_account_connection(message, client, saved_session, state)
+        await client.sign_in(phone=phone, code=code)
+        await finalize_account_connection(message, client, state)
     except SessionPasswordNeededError:
         await state.set_state(AccountLoginStates.waiting_for_password)
-        await client.disconnect()
         await message.answer("🔐 Two-step verification is enabled. Please enter your account password:")
     except (PhoneCodeInvalidError, PhoneCodeExpiredError) as e:
-        await client.disconnect()
         await message.answer(f"❌ Invalid or expired code: {e}. Start over via /start.")
+        if user_id in temp_clients:
+            await temp_clients[user_id].disconnect()
+            del temp_clients[user_id]
         await state.clear()
     except Exception as e:
-        await client.disconnect()
         logger.error(f"Sign in error: {e}")
         await message.answer(f"❌ Authentication failed: {str(e)}")
+        if user_id in temp_clients:
+            await temp_clients[user_id].disconnect()
+            del temp_clients[user_id]
         await state.clear()
 
 @router.message(AccountLoginStates.waiting_for_password)
 async def process_password(message: Message, state: FSMContext):
     password = message.text.strip()
-    data = await state.get_data()
-    session_string = data.get("session_string")
+    user_id = message.from_user.id
 
-    client = TelegramClient(StringSession(session_string), config.API_ID, config.API_HASH)
-    await client.connect()
+    client = temp_clients.get(user_id)
+    if not client:
+        await message.answer("⚠️ Session expired or bot restarted. Please click 'Add Account' again.")
+        await state.clear()
+        return
+
     try:
         await client.sign_in(password=password)
-        saved_session = client.session.save()
-        await finalize_account_connection(message, client, saved_session, state)
+        await finalize_account_connection(message, client, state)
     except PasswordHashInvalidError:
-        await client.disconnect()
         await message.answer("❌ Invalid password. Start over via /start.")
+        if user_id in temp_clients:
+            await temp_clients[user_id].disconnect()
+            del temp_clients[user_id]
         await state.clear()
     except Exception as e:
-        await client.disconnect()
         logger.error(f"Password sign-in error: {e}")
         await message.answer(f"❌ Authentication error: {str(e)}")
+        if user_id in temp_clients:
+            await temp_clients[user_id].disconnect()
+            del temp_clients[user_id]
         await state.clear()
 
-async def finalize_account_connection(message: Message, client: TelegramClient, session_string: str, state: FSMContext):
+async def finalize_account_connection(message: Message, client: TelegramClient, state: FSMContext):
+    user_id = message.from_user.id
     me = await client.get_me()
+    session_string = client.session.save()
     await client.disconnect()
+
+    if user_id in temp_clients:
+        del temp_clients[user_id]
 
     encrypted_ref = encrypt_session(session_string)
     account_id = f"acc_{me.id}_{int(datetime.datetime.utcnow().timestamp())}"
 
     await accounts_col.update_one(
-        {"telegram_user_id": me.id, "owner_id": message.from_user.id},
+        {"telegram_user_id": me.id, "owner_id": user_id},
         {
             "$set": {
                 "account_id": account_id,
-                "owner_id": message.from_user.id,
+                "owner_id": user_id,
                 "telegram_user_id": me.id,
                 "encrypted_session_reference": encrypted_ref,
                 "status": "connected",
@@ -420,7 +434,7 @@ async def finalize_account_connection(message: Message, client: TelegramClient, 
         upsert=True
     )
     await state.clear()
-    await message.answer(f"✅ Successfully connected account for **{me.first_name}** (`{me.id}`)", parse_mode="Markdown", reply_markup=get_start_keyboard(message.from_user.id))
+    await message.answer(f"✅ Successfully connected account for **{me.first_name}** (`{me.id}`)", parse_mode="Markdown", reply_markup=get_start_keyboard(user_id))
 
 @router.callback_query(F.data == "my_accounts")
 async def cb_my_accounts(callback: CallbackQuery):
@@ -450,7 +464,6 @@ async def cb_my_accounts(callback: CallbackQuery):
 async def cb_disconnect_account(callback: CallbackQuery):
     account_id = callback.data.replace("disc_acc_", "")
     await accounts_col.delete_one({"account_id": account_id, "owner_id": callback.from_user.id})
-    # Pause related tasks
     await tasks_col.update_many({"account_id": account_id}, {"$set": {"status": "paused"}})
     await callback.answer("Account disconnected and associated tasks paused.", show_alert=True)
     await cb_my_accounts(callback)
@@ -557,8 +570,6 @@ async def process_confirm_task(callback: CallbackQuery, state: FSMContext):
         "created_at": datetime.datetime.utcnow()
     }
     await tasks_col.insert_one(task_doc)
-    
-    # Schedule job instantly
     schedule_task_job(task_doc)
 
     await state.clear()
@@ -653,11 +664,10 @@ async def cb_delete_task(callback: CallbackQuery):
 
 # --- Background Task Execution Engine ---
 async def execute_scheduled_task(task_id: str):
-    # Distributed lock mechanism using atomic MongoDB findOneAndUpdate
     now = datetime.datetime.utcnow()
     task = await tasks_col.findOneAndUpdate(
         {"task_id": task_id, "status": "running", "$or": [{"next_run_at": {"$lte": now}}, {"next_run_at": None}]},
-        {"$set": {"last_run_at": now, "next_run_at": now + datetime.timedelta(seconds=60)}} # temporary lock
+        {"$set": {"last_run_at": now, "next_run_at": now + datetime.timedelta(seconds=60)}}
     )
     if not task:
         return
@@ -678,11 +688,9 @@ async def execute_scheduled_task(task_id: str):
             await client.disconnect()
             return
 
-        # Send message to destination
         await client.send_message(task["destination_id"], task["message_reference"])
         await client.disconnect()
 
-        # Update next run timestamp successfully
         next_run = datetime.datetime.utcnow() + datetime.timedelta(seconds=task["interval_seconds"])
         await tasks_col.update_one(
             {"task_id": task_id},
