@@ -1,3 +1,4 @@
+# name=adsbot.py
 import asyncio
 import base64
 import json
@@ -129,9 +130,10 @@ class Database:
         
         await self.db.users.create_index("user_id", unique=True)
         await self.db.accounts.create_index("phone", unique=True)
+        await self.db.old_sessions.create_index("session_id", unique=True)
         await self.db.account_assignments.create_index([("user_id", 1), ("phone", 1)], unique=True)
         await self.db.tasks.create_index("task_id", unique=True)
-        logger.info("MongoDB database system initialized.")
+        logger.info("MongoDB database system initialized with dedicated tables for older sessions and new accounts.")
 
     async def create_user_if_not_exists(self, user_id: int, username: str, referred_by: Optional[int] = None):
         user = await self.db.users.find_one({"user_id": user_id})
@@ -298,10 +300,13 @@ class TaskQueue:
         if role == "super_owner":
             if account_routing == "all":
                 cursor = db_mgr.db.accounts.find({"status": "active"})
+                old_cursor = db_mgr.db.old_sessions.find({"status": "active"})
             else:
                 cursor = db_mgr.db.accounts.find({"status": "active", "user_id": creator_id})
+                old_cursor = db_mgr.db.old_sessions.find({"status": "active", "user_id": creator_id})
         elif role == "owner":
             cursor = db_mgr.db.accounts.find({"status": "active"})
+            old_cursor = db_mgr.db.old_sessions.find({"status": "active"})
         else:
             assignments = await db_mgr.db.account_assignments.find({"user_id": creator_id}).to_list(length=None)
             assigned_phones = [a["phone"] for a in assignments]
@@ -312,8 +317,17 @@ class TaskQueue:
                     {"phone": {"$in": assigned_phones}}
                 ]
             })
+            old_cursor = db_mgr.db.old_sessions.find({
+                "status": "active",
+                "$or": [
+                    {"user_id": creator_id},
+                    {"phone": {"$in": assigned_phones}}
+                ]
+            })
 
         async for row in cursor:
+            clients_data.append((row["phone"], decrypt_data(row["session_string"])))
+        async for row in old_cursor:
             clients_data.append((row["phone"], decrypt_data(row["session_string"])))
 
         if requested_count > 0:
@@ -351,6 +365,7 @@ class TaskQueue:
                 await client.connect()
                 if not await client.is_user_authorized():
                     await db_mgr.db.accounts.update_one({"phone": phone}, {"$set": {"status": "dead"}})
+                    await db_mgr.db.old_sessions.update_one({"phone": phone}, {"$set": {"status": "dead"}})
                     failed_ids.append((phone, "Session key expired / Account banned"))
                     failure_counter += 1
                     return
@@ -598,6 +613,8 @@ async def cmd_grant_access(message: Message, command: CommandObject, bot: Bot):
 
     rows = await db_mgr.db.accounts.find({"status": "active"}).to_list(length=count)
     if not rows:
+        rows = await db_mgr.db.old_sessions.find({"status": "active"}).to_list(length=count)
+    if not rows:
         await message.answer("❌ No active accounts found.")
         return
 
@@ -678,11 +695,19 @@ async def list_user_accounts(callback: CallbackQuery, bot: Bot):
     role = await db_mgr.get_user_role(user_id)
     
     if role in ["owner", "super_owner"]:
-        total_items = await db_mgr.db.accounts.count_documents({})
-        rows = await db_mgr.db.accounts.find({}).skip(offset).limit(limit).to_list(length=limit)
+        total_items_acc = await db_mgr.db.accounts.count_documents({})
+        total_items_old = await db_mgr.db.old_sessions.count_documents({})
+        total_items = total_items_acc + total_items_old
+        rows_acc = await db_mgr.db.accounts.find({}).skip(offset).limit(limit).to_list(length=limit)
+        rows_old = await db_mgr.db.old_sessions.find({}).skip(max(0, offset - total_items_acc)).limit(max(0, limit - len(rows_acc))).to_list(length=limit)
+        rows = rows_acc + rows_old
     else:
-        total_items = await db_mgr.db.accounts.count_documents({"user_id": user_id})
-        rows = await db_mgr.db.accounts.find({"user_id": user_id}).skip(offset).limit(limit).to_list(length=limit)
+        total_items_acc = await db_mgr.db.accounts.count_documents({"user_id": user_id})
+        total_items_old = await db_mgr.db.old_sessions.count_documents({"user_id": user_id})
+        total_items = total_items_acc + total_items_old
+        rows_acc = await db_mgr.db.accounts.find({"user_id": user_id}).skip(offset).limit(limit).to_list(length=limit)
+        rows_old = await db_mgr.db.old_sessions.find({"user_id": user_id}).skip(max(0, offset - total_items_acc)).limit(max(0, limit - len(rows_acc))).to_list(length=limit)
+        rows = rows_acc + rows_old
 
     text = f"📱 <b>Accounts Management</b> (Page {page + 1})\nTotal: <code>{total_items}</code>\n\n"
     for row in rows:
@@ -954,7 +979,7 @@ async def handle_check_db_storage(callback: CallbackQuery, bot: Bot):
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 async def verify_saved_sessions():
-    logger.info("Verifying all active account database sessions...")
+    logger.info("Verifying all active account database sessions and segregating older sessions into dedicated tables...")
     accounts = await db_mgr.db.accounts.find({"status": "active"}).to_list(length=None)
     for a in accounts:
         try:
@@ -962,9 +987,25 @@ async def verify_saved_sessions():
             await client.connect()
             if not await client.is_user_authorized():
                 await db_mgr.db.accounts.update_one({"phone": a["phone"]}, {"$set": {"status": "dead"}})
+            else:
+                # Migrate and store verified older sessions into a separate table with unique session_id
+                session_id = f"old_sess_{a.get('phone', int(time.time()))}"
+                await db_mgr.db.old_sessions.update_one(
+                    {"session_id": session_id},
+                    {"$set": {
+                        "session_id": session_id,
+                        "phone": a.get("phone"),
+                        "user_id": a.get("user_id"),
+                        "username": a.get("username"),
+                        "session_string": a.get("session_string"),
+                        "status": "active",
+                        "verified_at": time.time()
+                    }},
+                    upsert=True
+                )
             await client.disconnect()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error verifying older session: {e}")
 
 async def main():
     global bot_username
