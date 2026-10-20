@@ -2,31 +2,21 @@ import os
 import sys
 import logging
 
-# --- LOGGING SETUP ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("MultiAccountSystem")
+logger = logging.getLogger("config")
 
-# --- CREDENTIALS ---
-API_ID = int(os.getenv("TG_API_ID", ""))
-API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+def get_env_var(var_name: str, required: bool = True) -> str:
+    value = os.getenv(var_name)
+    if not value and required:
+        logger.error(f"Missing required environment variable: {var_name}")
+        print(f"[FATAL ERROR] Missing required environment variable: {var_name}", file=sys.stderr)
+        sys.exit(1)
+    return value or ""
 
-# --- DATABASE ---
-MONGO_URI =  "mongodb+srv://gopaljichoubey:gopaljichoubey12@cluster0.imgbed7.mongodb.net/?appName=Cluster0"
-
-# HARDCODED SUPER-OWNER IDS
-SUPER_OWNER_IDS = [1876329759] 
-
-# DEVELOPER ATTRIBUTIONS
-DESIGNER_HANDLE = "Gopalji_choubey"
-MANAGER_HANDLE = "BMWM4Z"
-
-# CRYPTO KEY FOR LOCAL DATABASE OBFUSCATION
-SECRET_KEY = os.getenv("ENCRYPTION_KEY", "secure_fallback_key_2026")
-
-# AUDIT CHANNEL FOR TELEGRAM LOG EVENTS
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "-1003917762371"))
+BOT_TOKEN = get_env_var("BOT_TOKEN")
+SUPER_OWNER_ID = int(get_env_var("SUPER_OWNER_ID"))
+MONGODB_URI = get_env_var("MONGODB_URI")
+MONGODB_DATABASE = get_env_var("MONGODB_DATABASE")
+API_ID = int(get_env_var("API_ID"))
+API_HASH = get_env_var("API_HASH")
+ENCRYPTION_KEY = get_env_var("ENCRYPTION_KEY")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
