@@ -16,7 +16,7 @@ API_HASH = os.getenv("TG_API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 # --- DATABASE ---
-MONGO_URI =  ""
+MONGO_URI =  os.getenv("")
 
 # HARDCODED SUPER-OWNER IDS
 SUPER_OWNER_IDS = [1876329759] 
