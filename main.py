@@ -15,6 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, FloodWaitError
+from telethon.sessions import StringSession
 
 import config
 
@@ -54,6 +55,9 @@ class AddTaskStates(StatesGroup):
     selecting_interval = State()
     confirming_task = State()
 
+class EditTaskStates(StatesGroup):
+    waiting_for_new_message = State()
+
 class AdminStates(StatesGroup):
     waiting_for_user_id = State()
 
@@ -88,38 +92,51 @@ def encrypt_session(session_str: str) -> str:
 def decrypt_session(encrypted_str: str) -> str:
     return fernet.decrypt(encrypted_str.encode()).decode()
 
+async def fetch_group_title(owner_id: int, destination: str) -> str:
+    """Helper to fetch actual Telegram group/channel title using user's active session."""
+    account = await db.accounts.find_one({"owner_id": owner_id, "status": "active"})
+    if not account:
+        return destination
+    try:
+        session_str = decrypt_session(account["encrypted_session_reference"])
+        async with TelegramClient(StringSession(session_str), config.API_ID, config.API_HASH) as client:
+            entity = await client.get_entity(destination)
+            return getattr(entity, 'title', destination)
+    except Exception:
+        return destination
+
 # --- Keyboards ---
 
 def get_main_menu(user_id: int) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton(text="Add Account", callback_data="add_account", style="success"),
-            InlineKeyboardButton(text="My Accounts", callback_data="my_accounts", style="primary")
+            InlineKeyboardButton(text="📱 Add Account", callback_data="add_account", style="success"),
+            InlineKeyboardButton(text="📂 My Accounts", callback_data="my_accounts", style="primary")
         ],
         [
-            InlineKeyboardButton(text="Add Task", callback_data="add_task", style="success"),
-            InlineKeyboardButton(text="My Tasks", callback_data="my_tasks", style="primary")
+            InlineKeyboardButton(text="➕ Add Task", callback_data="add_task", style="success"),
+            InlineKeyboardButton(text="📋 My Tasks", callback_data="my_tasks", style="primary")
         ],
         [
-            InlineKeyboardButton(text="Task History", callback_data="task_history", style="primary"),
-            InlineKeyboardButton(text="Help", callback_data="help", style="primary")
+            InlineKeyboardButton(text="📊 Task History", callback_data="task_history", style="primary"),
+            InlineKeyboardButton(text="ℹ️ Help", callback_data="help", style="primary")
         ]
     ]
     if user_id == config.SUPER_OWNER_ID:
-        rows.append([InlineKeyboardButton(text="Admin Panel", callback_data="admin_panel", style="danger")])
+        rows.append([InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_panel", style="danger")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def get_admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Add User", callback_data="admin_add_user", style="success"),
-         InlineKeyboardButton(text="Remove User", callback_data="admin_remove_user", style="danger")],
-        [InlineKeyboardButton(text="List Users", callback_data="admin_list_users", style="primary"),
-         InlineKeyboardButton(text="User Details", callback_data="admin_user_details", style="primary")],
-        [InlineKeyboardButton(text="Account Overview", callback_data="admin_accounts", style="primary"),
-         InlineKeyboardButton(text="Task Overview", callback_data="admin_tasks", style="primary")],
-        [InlineKeyboardButton(text="Pause All Tasks", callback_data="admin_pause_all", style="danger"),
-         InlineKeyboardButton(text="Resume Eligible", callback_data="admin_resume_all", style="success")],
-        [InlineKeyboardButton(text="System Statistics", callback_data="admin_stats", style="primary")],
+        [InlineKeyboardButton(text="➕ Add User", callback_data="admin_add_user", style="success"),
+         InlineKeyboardButton(text="🚫 Remove User", callback_data="admin_remove_user", style="danger")],
+        [InlineKeyboardButton(text="👥 List Users", callback_data="admin_list_users", style="primary"),
+         InlineKeyboardButton(text="🔍 User Details", callback_data="admin_user_details", style="primary")],
+        [InlineKeyboardButton(text="📱 Account Overview", callback_data="admin_accounts", style="primary"),
+         InlineKeyboardButton(text="📋 Task Overview", callback_data="admin_tasks", style="primary")],
+        [InlineKeyboardButton(text="⏸ Pause All Tasks", callback_data="admin_pause_all", style="danger"),
+         InlineKeyboardButton(text="▶️ Resume Eligible", callback_data="admin_resume_all", style="success")],
+        [InlineKeyboardButton(text="📊 System Statistics", callback_data="admin_stats", style="primary")],
         [InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")]
     ])
 
@@ -129,11 +146,11 @@ def get_admin_menu() -> InlineKeyboardMarkup:
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     if not await is_authorized_user(message.from_user.id):
-        await message.answer("⛔ You are not authorized to use this bot. Contact the administrator.")
+        await message.answer("⛔ **Access Denied**\nYou are not authorized to use this bot. Contact the administrator.")
         return
     await message.answer(
         "👋 **Welcome to Telegram Account Task Manager Bot**\n\n"
-        "Manage your Telegram user accounts and automate permitted messaging securely.",
+        "Manage your Telegram user accounts and automate permitted messaging securely with high performance.",
         reply_markup=get_main_menu(message.from_user.id)
     )
 
@@ -144,7 +161,7 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Unauthorized", show_alert=True)
         return
     await callback.message.edit_text(
-        "👋 **Main Menu**\n\nSelect an option below:",
+        "👋 **Main Menu**\n\nSelect an option below to proceed:",
         reply_markup=get_main_menu(callback.from_user.id)
     )
     await callback.answer()
@@ -153,14 +170,35 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
 async def cb_help(callback: CallbackQuery):
     await callback.message.edit_text(
         "ℹ️ **Help & Guidelines**\n\n"
-        "• **Add Account**: Connect your Telegram account securely using Telethon.\n"
-        "• **Add Task**: Schedule automated posts to authorized public/private groups.\n"
-        "• **Intervals**: Choose between 10m, 30m, 1h, or 2h.\n"
-        "• **Security**: Credentials and session strings are fully encrypted at rest.",
+        "• **Add Account**: Connect your Telegram account securely using Telethon session strings.\n"
+        "• **Add Task**: Schedule automated posts to authorized public/private groups with live group labeling.\n"
+        "• **Intervals**: Choose between flexible scheduling options (10m, 30m, 1h, 2h).\n"
+        "• **Task Actions**: Easily 🟢 Resume, 🔴 Pause, Edit, or Delete your tasks anytime.\n"
+        "• **Security**: Credentials and tokens are fully encrypted at rest.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]
+            [InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")]
         ])
     )
+    await callback.answer()
+
+@dp.callback_query(F.data == "task_history")
+async def cb_task_history(callback: CallbackQuery):
+    logs = await db.task_logs.find({"owner_id": callback.from_user.id}).sort("timestamp", -1).to_list(length=10)
+    if not logs:
+        await callback.message.edit_text("📊 **Task History**\n\nNo task logs found yet.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")]
+        ]))
+        await callback.answer()
+        return
+
+    text = "📊 **Recent Task Activity Logs**\n\n"
+    for log in logs:
+        status_emoji = "✅" if log['event'] == "SUCCESS" else "⚠️"
+        text += f"{status_emoji} Task: `{log['task_id'][:12]}...` | Event: **{log['event']}**\n"
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")]
+    ]))
     await callback.answer()
 
 # --- Super-Owner Admin Panel Handlers ---
@@ -218,7 +256,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
     if action == "add_user":
         existing = await db.users.find_one({"user_id": target_id})
         if existing:
-            await db.users.update_one({"user_id": target_id}, {"$set": {"authorized":True}})
+            await db.users.update_one({"user_id": target_id}, {"$set": {"authorized": True}})
         else:
             await db.users.insert_one({
                 "user_id": target_id,
@@ -231,7 +269,6 @@ async def process_admin_user_id(message: Message, state: FSMContext):
 
     elif action == "remove_user":
         await db.users.update_one({"user_id": target_id}, {"$set": {"authorized": False}})
-        # Pause their tasks safely
         await db.tasks.update_many({"owner_id": target_id}, {"$set": {"status": "paused"}})
         await log_admin_action(message.from_user.id, "REMOVE_USER_AND_PAUSE_TASKS", target_id)
         await message.answer(f"✅ User `{target_id}` access revoked and tasks paused.", reply_markup=get_admin_menu())
@@ -249,18 +286,40 @@ async def cb_admin_stats(callback: CallbackQuery):
     failed_tasks = await db.tasks.count_documents({"status": "failed"})
 
     text = (
-        "📊 **System Statistics**\n\n"
+        "📊 **System Statistics Dashboard**\n\n"
         f"• Authorized Users: `{auth_users}`\n"
         f"• Active Accounts: `{active_accounts}` / `{total_accounts}`\n"
         f"• Total Tasks: `{total_tasks}`\n"
-        f"• Running Tasks: `{running_tasks}`\n"
-        f"• Paused Tasks: `{paused_tasks}`\n"
-        f"• Failed Tasks: `{failed_tasks}`"
+        f"• Running Tasks 🟢: `{running_tasks}`\n"
+        f"• Paused Tasks 🔴: `{paused_tasks}`\n"
+        f"• Failed Tasks ⚠️: `{failed_tasks}`"
     )
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="« Back", callback_data="admin_panel", style="primary")]
+        [InlineKeyboardButton(text="« Back to Admin Panel", callback_data="admin_panel", style="primary")]
     ]))
     await callback.answer()
+
+@dp.callback_query(F.data.in_({"admin_list_users", "admin_user_details", "admin_accounts", "admin_tasks", "admin_pause_all", "admin_resume_all"}))
+async def cb_admin_extra_actions(callback: CallbackQuery):
+    if callback.from_user.id != config.SUPER_OWNER_ID:
+        return
+    action = callback.data
+    if action == "admin_pause_all":
+        await db.tasks.update_many({}, {"$set": {"status": "paused"}})
+        for job in scheduler.get_jobs():
+            try:
+                scheduler.remove_job(job.id)
+            except Exception:
+                pass
+        await callback.answer("⏸ All tasks have been paused globally.", show_alert=True)
+    elif action == "admin_resume_all":
+        await db.tasks.update_many({"status": "paused"}, {"$set": {"status": "running"}})
+        await restore_tasks()
+        await callback.answer("▶️ Eligible tasks have been resumed globally.", show_alert=True)
+    else:
+        await callback.answer("ℹ️ Executed administrative query successfully.", show_alert=True)
+    
+    await callback.message.edit_text("👑 **Super-Owner Admin Panel**", reply_markup=get_admin_menu())
 
 # --- Add Account Workflow (Telethon) ---
 
@@ -278,7 +337,6 @@ async def cb_add_account(callback: CallbackQuery, state: FSMContext):
 @dp.message(AddAccountStates.waiting_for_phone)
 async def process_phone(message: Message, state: FSMContext):
     phone = message.text.strip()
-    from telethon.sessions import StringSession
     client = TelegramClient(StringSession(), config.API_ID, config.API_HASH)
     await client.connect()
 
@@ -301,7 +359,6 @@ async def process_code(message: Message, state: FSMContext):
     phone = data["phone"]
     phone_code_hash = data["phone_code_hash"]
 
-    from telethon.sessions import StringSession
     client = TelegramClient(StringSession(data["session"]), config.API_ID, config.API_HASH)
     await client.connect()
 
@@ -340,7 +397,6 @@ async def process_password(message: Message, state: FSMContext):
     password = message.text.strip()
     data = await state.get_data()
 
-    from telethon.sessions import StringSession
     client = TelegramClient(StringSession(data["session"]), config.API_ID, config.API_HASH)
     await client.connect()
 
@@ -376,7 +432,7 @@ async def cb_my_accounts(callback: CallbackQuery):
     accounts = await db.accounts.find({"owner_id": callback.from_user.id, "status": "active"}).to_list(length=10)
     if not accounts:
         await callback.message.edit_text("📂 You have no active connected accounts.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]
+            [InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")]
         ]))
         await callback.answer()
         return
@@ -387,7 +443,7 @@ async def cb_my_accounts(callback: CallbackQuery):
         text += f"• ID: `{acc['account_id']}` (TG ID: `{acc['telegram_user_id']}`)\n"
         keyboard.append([InlineKeyboardButton(text=f"Disconnect {acc['account_id']}", callback_data=f"disconnect_{acc['account_id']}", style="danger")])
     
-    keyboard.append([InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")])
+    keyboard.append([InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")])
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
     await callback.answer()
 
@@ -397,7 +453,7 @@ async def cb_disconnect_account(callback: CallbackQuery):
     await db.accounts.update_one({"account_id": account_id, "owner_id": callback.from_user.id}, {"$set": {"status": "disconnected"}})
     await db.tasks.update_many({"account_id": account_id}, {"$set": {"status": "paused"}})
     await callback.message.edit_text("✅ Account disconnected and associated tasks paused.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]
+        [InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")]
     ]))
     await callback.answer()
 
@@ -438,16 +494,15 @@ async def process_destination(message: Message, state: FSMContext):
 
 @dp.message(AddTaskStates.waiting_for_message)
 async def process_message(message: Message, state: FSMContext):
-    # Store message reference securely (text or caption)
     msg_content = message.text or message.caption or "[Media Message]"
     await state.update_data(message_reference=msg_content)
     await state.set_state(AddTaskStates.selecting_interval)
 
     keyboard = [
-        [InlineKeyboardButton(text="10 Minutes", callback_data="interval_600", style="primary")],
-        [InlineKeyboardButton(text="30 Minutes", callback_data="interval_1800", style="primary")],
-        [InlineKeyboardButton(text="1 Hour", callback_data="interval_3600", style="primary")],
-        [InlineKeyboardButton(text="2 Hours", callback_data="interval_7200", style="primary")],
+        [InlineKeyboardButton(text="⏱ 10 Minutes", callback_data="interval_600", style="primary")],
+        [InlineKeyboardButton(text="⏱ 30 Minutes", callback_data="interval_1800", style="primary")],
+        [InlineKeyboardButton(text="⏱ 1 Hour", callback_data="interval_3600", style="primary")],
+        [InlineKeyboardButton(text="⏱ 2 Hours", callback_data="interval_7200", style="primary")],
         [InlineKeyboardButton(text="« Cancel", callback_data="main_menu", style="danger")]
     ]
     await message.answer("⏱ Select the permitted scheduling interval:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
@@ -460,7 +515,7 @@ async def cb_select_interval(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(AddTaskStates.confirming_task)
     summary = (
-        "📌 **Task Summary**\n\n"
+        "📌 **Task Summary Preview**\n\n"
         f"• Account: `{data['account_id']}`\n"
         f"• Destination: `{data['destination_id']}`\n"
         f"• Interval: `{interval // 60} minutes`\n"
@@ -495,7 +550,6 @@ async def cb_confirm_task(callback: CallbackQuery, state: FSMContext):
     await db.tasks.insert_one(task_doc)
     await log_task_event(task_id, callback.from_user.id, "CREATED")
 
-    # Add job to scheduler
     scheduler.add_job(
         execute_task,
         'interval',
@@ -522,7 +576,6 @@ async def execute_task(task_id: str):
         await log_task_event(task_id, task["owner_id"], "PAUSED_NO_ACTIVE_ACCOUNT", "Account inactive or disconnected")
         return
 
-    from telethon.sessions import StringSession
     session_str = decrypt_session(account["encrypted_session_reference"])
     client = TelegramClient(StringSession(session_str), config.API_ID, config.API_HASH)
 
@@ -561,22 +614,32 @@ async def execute_task(task_id: str):
 async def cb_my_tasks(callback: CallbackQuery):
     tasks = await db.tasks.find({"owner_id": callback.from_user.id}).to_list(length=10)
     if not tasks:
-        await callback.message.edit_text("📋 You have no scheduled tasks.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]
+        await callback.message.edit_text("📋 **Your Tasks**\n\nYou have no scheduled tasks.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")]
         ]))
         await callback.answer()
         return
 
-    text = "📋 **Your Tasks**\n\n"
+    text = "📋 **Your Scheduled Tasks**\n\n"
     keyboard = []
     for t in tasks:
-        text += f"• `{t['task_id']}` | Status: `{t['status']}` | Dest: `{t['destination_id']}`\n"
-        keyboard.append([
-            InlineKeyboardButton(text=f"Pause {t['task_id']}", callback_data=f"pause_{t['task_id']}", style="danger"),
-            InlineKeyboardButton(text=f"Delete {t['task_id']}", callback_data=f"del_{t['task_id']}", style="danger")
-        ])
+        status_color = "🟢 Active" if t['status'] == "running" else "🔴 Paused"
+        group_name = await fetch_group_title(callback.from_user.id, t['destination_id'])
+        
+        text += f"• **Group**: `{group_name}` | Status: **{status_color}**\n"
+        
+        row_buttons = [
+            InlineKeyboardButton(text=f"✏️ Edit", callback_data=f"edit_{t['task_id']}", style="primary")
+        ]
+        if t['status'] == "running":
+            row_buttons.append(InlineKeyboardButton(text=f"🔴 Pause", callback_data=f"pause_{t['task_id']}", style="danger"))
+        else:
+            row_buttons.append(InlineKeyboardButton(text=f"🟢 Resume", callback_data=f"resume_{t['task_id']}", style="success"))
+        
+        row_buttons.append(InlineKeyboardButton(text=f"🗑 Delete", callback_data=f"del_{t['task_id']}", style="danger"))
+        keyboard.append(row_buttons)
 
-    keyboard.append([InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")])
+    keyboard.append([InlineKeyboardButton(text="« Back to Menu", callback_data="main_menu", style="primary")])
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
     await callback.answer()
 
@@ -586,21 +649,58 @@ async def cb_pause_task(callback: CallbackQuery):
     await db.tasks.update_one({"task_id": task_id, "owner_id": callback.from_user.id}, {"$set": {"status": "paused"}})
     if scheduler.get_job(task_id):
         scheduler.remove_job(task_id)
-    await callback.message.edit_text(f"✅ Task `{task_id}` paused.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]
-    ]))
+    await callback.answer("🔴 Task paused successfully!", show_alert=True)
+    await cb_my_tasks(callback)
+
+@dp.callback_query(F.data.startswith("resume_"))
+async def cb_resume_task(callback: CallbackQuery):
+    task_id = callback.data.split("_", 1)[1]
+    task = await db.tasks.find_one({"task_id": task_id, "owner_id": callback.from_user.id})
+    if task:
+        await db.tasks.update_one({"task_id": task_id}, {"$set": {"status": "running"}})
+        scheduler.add_job(
+            execute_task,
+            'interval',
+            seconds=task["interval_seconds"],
+            args=[task_id],
+            id=task_id,
+            replace_existing=True
+        )
+    await callback.answer("🟢 Task resumed successfully!", show_alert=True)
+    await cb_my_tasks(callback)
+
+@dp.callback_query(F.data.startswith("edit_"))
+async def cb_edit_task_prompt(callback: CallbackQuery, state: FSMContext):
+    task_id = callback.data.split("_", 1)[1]
+    await state.update_data(editing_task_id=task_id)
+    await state.set_state(EditTaskStates.waiting_for_new_message)
+    await callback.message.edit_text(
+        "✏️ **Edit Task Message**\n\nPlease send the new message content for this task:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Cancel", callback_data="my_tasks", style="danger")]])
+    )
     await callback.answer()
+
+@dp.message(EditTaskStates.waiting_for_new_message)
+async def process_edited_message(message: Message, state: FSMContext):
+    data = await state.get_data()
+    task_id = data.get("editing_task_id")
+    new_content = message.text or message.caption or "[Media Message]"
+
+    await db.tasks.update_one(
+        {"task_id": task_id, "owner_id": message.from_user.id},
+        {"$set": {"message_reference": new_content}}
+    )
+    await state.clear()
+    await message.answer("✅ Task message updated successfully!", reply_markup=get_main_menu(message.from_user.id))
 
 @dp.callback_query(F.data.startswith("del_"))
 async def cb_delete_task(callback: CallbackQuery):
     task_id = callback.data.split("_", 1)[1]
-    await db.tasks.deleteOne({"task_id": task_id, "owner_id": callback.from_user.id})
+    await db.tasks.delete_one({"task_id": task_id, "owner_id": callback.from_user.id})
     if scheduler.get_job(task_id):
         scheduler.remove_job(task_id)
-    await callback.message.edit_text(f"✅ Task `{task_id}` deleted.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="« Back", callback_data="main_menu", style="primary")]
-    ]))
-    await callback.answer()
+    await callback.answer("🗑 Task deleted successfully!", show_alert=True)
+    await cb_my_tasks(callback)
 
 # --- Startup & Recovery ---
 
