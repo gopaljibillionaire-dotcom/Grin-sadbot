@@ -60,6 +60,7 @@ class EditTaskStates(StatesGroup):
 
 class AdminStates(StatesGroup):
     waiting_for_user_id = State()
+    waiting_for_detail_user_id = State()
 
 # --- Security & DB Helpers ---
 
@@ -172,7 +173,7 @@ async def cb_help(callback: CallbackQuery):
         "ℹ️ **Help & Guidelines**\n\n"
         "• **Add Account**: Connect your Telegram account securely using Telethon session strings.\n"
         "• **Add Task**: Schedule automated posts to authorized public/private groups with live group labeling.\n"
-        "• **Intervals**: Choose between flexible scheduling options (10m, 30m, 1h, 2h).\n"
+        "• **Intervals**: Choose flexible scheduling options including **30-Second Aggressive Mode**, 10m, 30m, 1h, 2h.\n"
         "• **Task Actions**: Easily 🟢 Resume, 🔴 Pause, Edit, or Delete your tasks anytime.\n"
         "• **Security**: Credentials and tokens are fully encrypted at rest.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -273,6 +274,99 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         await log_admin_action(message.from_user.id, "REMOVE_USER_AND_PAUSE_TASKS", target_id)
         await message.answer(f"✅ User `{target_id}` access revoked and tasks paused.", reply_markup=get_admin_menu())
 
+@dp.callback_query(F.data == "admin_list_users")
+async def cb_admin_list_users(callback: CallbackQuery):
+    if callback.from_user.id != config.SUPER_OWNER_ID:
+        return
+    users = await db.users.find({}).to_list(length=50)
+    text = "👥 **Authorized / Registered Users List**\n\n"
+    if not users:
+        text += "No users found in database."
+    else:
+        for u in users:
+            status = "🟢 Authorized" if u.get("authorized") else "🔴 Revoked"
+            text += f"• ID: `{u['user_id']}` | Status: {status}\n"
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="« Back to Admin Panel", callback_data="admin_panel", style="primary")]
+    ]))
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_user_details")
+async def cb_admin_user_details_prompt(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != config.SUPER_OWNER_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_detail_user_id)
+    await callback.message.edit_text(
+        "🔍 **User Details Lookup**\n\nEnter the numeric Telegram User ID to inspect accounts and tasks:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Cancel", callback_data="admin_panel", style="danger")]])
+    )
+    await callback.answer()
+
+@dp.message(AdminStates.waiting_for_detail_user_id)
+async def process_admin_user_details(message: Message, state: FSMContext):
+    if message.from_user.id != config.SUPER_OWNER_ID:
+        return
+    await state.clear()
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Invalid User ID.", reply_markup=get_admin_menu())
+        return
+
+    user_doc = await db.users.find_one({"user_id": target_id})
+    acc_count = await db.accounts.count_documents({"owner_id": target_id})
+    task_count = await db.tasks.count_documents({"owner_id": target_id})
+    running_tasks = await db.tasks.count_documents({"owner_id": target_id, "status": "running"})
+
+    auth_status = "Authorized" if (target_id == config.SUPER_OWNER_ID or (user_doc and user_doc.get("authorized"))) else "Unauthorized/Revoked"
+
+    text = (
+        f"🔍 **Details for User `{target_id}`**\n\n"
+        f"• Status: **{auth_status}**\n"
+        f"• Connected Accounts: `{acc_count}`\n"
+        f"• Total Tasks: `{task_count}`\n"
+        f"• Running Tasks 🟢: `{running_tasks}`"
+    )
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="« Back to Admin Panel", callback_data="admin_panel", style="primary")]
+    ]))
+
+@dp.callback_query(F.data == "admin_accounts")
+async def cb_admin_accounts_overview(callback: CallbackQuery):
+    if callback.from_user.id != config.SUPER_OWNER_ID:
+        return
+    accounts = await db.accounts.find({}).to_list(length=30)
+    text = "📱 **Global Account Overview**\n\n"
+    if not accounts:
+        text += "No accounts connected in the system."
+    else:
+        for acc in accounts:
+            text += f"• Account ID: `{acc['account_id']}`\n  Owner: `{acc['owner_id']}` | Status: **{acc['status']}**\n\n"
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="« Back to Admin Panel", callback_data="admin_panel", style="primary")]
+    ]))
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_tasks")
+async def cb_admin_tasks_overview(callback: CallbackQuery):
+    if callback.from_user.id != config.SUPER_OWNER_ID:
+        return
+    tasks = await db.tasks.find({}).to_list(length=30)
+    text = "📋 **Global Task Overview**\n\n"
+    if not tasks:
+        text += "No tasks scheduled in the system."
+    else:
+        for t in tasks:
+            status_emoji = "🟢" if t['status'] == "running" else "🔴"
+            text += f"• Task ID: `{t['task_id'][:12]}...`\n  Owner: `{t['owner_id']}` | Status: {status_emoji} {t['status']}\n\n"
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="« Back to Admin Panel", callback_data="admin_panel", style="primary")]
+    ]))
+    await callback.answer()
+
 @dp.callback_query(F.data == "admin_stats")
 async def cb_admin_stats(callback: CallbackQuery):
     if callback.from_user.id != config.SUPER_OWNER_ID:
@@ -299,8 +393,8 @@ async def cb_admin_stats(callback: CallbackQuery):
     ]))
     await callback.answer()
 
-@dp.callback_query(F.data.in_({"admin_list_users", "admin_user_details", "admin_accounts", "admin_tasks", "admin_pause_all", "admin_resume_all"}))
-async def cb_admin_extra_actions(callback: CallbackQuery):
+@dp.callback_query(F.data.in_({"admin_pause_all", "admin_resume_all"}))
+async def cb_admin_global_task_actions(callback: CallbackQuery):
     if callback.from_user.id != config.SUPER_OWNER_ID:
         return
     action = callback.data
@@ -316,8 +410,6 @@ async def cb_admin_extra_actions(callback: CallbackQuery):
         await db.tasks.update_many({"status": "paused"}, {"$set": {"status": "running"}})
         await restore_tasks()
         await callback.answer("▶️ Eligible tasks have been resumed globally.", show_alert=True)
-    else:
-        await callback.answer("ℹ️ Executed administrative query successfully.", show_alert=True)
     
     await callback.message.edit_text("👑 **Super-Owner Admin Panel**", reply_markup=get_admin_menu())
 
@@ -499,6 +591,7 @@ async def process_message(message: Message, state: FSMContext):
     await state.set_state(AddTaskStates.selecting_interval)
 
     keyboard = [
+        [InlineKeyboardButton(text="⚡ 30 Seconds (Aggressive Mode)", callback_data="interval_30", style="danger")],
         [InlineKeyboardButton(text="⏱ 10 Minutes", callback_data="interval_600", style="primary")],
         [InlineKeyboardButton(text="⏱ 30 Minutes", callback_data="interval_1800", style="primary")],
         [InlineKeyboardButton(text="⏱ 1 Hour", callback_data="interval_3600", style="primary")],
@@ -514,11 +607,13 @@ async def cb_select_interval(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
     await state.set_state(AddTaskStates.confirming_task)
+    
+    interval_display = f"{interval} seconds (Aggressive Mode)" if interval == 30 else f"{interval // 60} minutes"
     summary = (
         "📌 **Task Summary Preview**\n\n"
         f"• Account: `{data['account_id']}`\n"
         f"• Destination: `{data['destination_id']}`\n"
-        f"• Interval: `{interval // 60} minutes`\n"
+        f"• Interval: `{interval_display}`\n"
         f"• Message Preview: {data['message_reference'][:100]}...\n\n"
         "Confirm task creation?"
     )
